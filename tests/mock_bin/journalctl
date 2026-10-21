@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Mock journalctl for tests: prints TEST_JOURNAL.
+[ -n "${TEST_JOURNAL:-}" ] && printf '%b\n' "$TEST_JOURNAL"
+exit 0

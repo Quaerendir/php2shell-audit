@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Mock `ps -eo pid=,ppid=,comm=`: TEST_PS="pid:ppid:comm ..." adds processes.
+echo "    1     0 systemd"
+echo "  500     1 sshd"
+for spec in ${TEST_PS:-}; do
+  IFS=: read -r pid ppid comm <<< "$spec"
+  printf '%5s %5s %s\n' "$pid" "$ppid" "$comm"
+done

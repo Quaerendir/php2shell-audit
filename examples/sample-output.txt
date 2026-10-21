@@ -1,0 +1,46 @@
+
+== Host inventory ==
+  host: web01
+  arch: x86_64
+  distro: Debian GNU/Linux 13 (trixie)
+  ! not root: config and logs of other users may be unreadable (fine on shared hosting)
+
+== PHP builds ==
+  - /usr/bin/php8.1  8.1.34 (cli)  VULNERABLE: not package-managed (custom build): branch 8.1 is end of life: no upstream release with the fix
+  - /usr/bin/php8.4  8.4.16 (cli), serves web  VULNERABLE: php8.4-cli 8.4.16-1~deb13u1 < fixed 8.4.27-1~deb13u1
+  - /usr/sbin/php-fpm8.4  8.4.16 (fpm-fcgi), serves web  VULNERABLE: php8.4-fpm 8.4.16-1~deb13u1 < fixed 8.4.27-1~deb13u1
+  ! Apache loads mod_php (8.4): highest-risk SAPI
+
+== Interim settings (reduce exposure, do not make a host safe) ==
+  /usr/bin/php8.1: memory_limit=128M upload_progress=1 -> none
+  /usr/bin/php8.4: memory_limit=128M upload_progress=1 -> none
+  FPM pools: 1 readable; admin memory_limit=-1: 0, upload_progress off: 0, pm.max_requests=1: 0
+  . values come from the global ini seen by CLI/CGI; per-pool and per-directory
+    overrides are reported separately. .user.ini and ini_set() apply too late.
+
+== Web roots (since 2026-10-20) ==
+  /var/www: per-dir ini overrides=0 php changed since 2026-10-20=1 php in uploads=0 web shell patterns=0
+
+== Behavioural IoC hunt (since 2026-10-20) ==
+  ! PHP worker crash lines in logs: 1 (failed attempts crash workers)
+  + no shell or downloader running under a PHP/Apache worker
+
+== Summary ==
+  verdict: VULNERABLE
+  reason: 2 unfixed build(s) serve web requests
+  risk score: 95 / 100
+  builds: total=3 patched=0 vulnerable=3 (web=2) unknown=0 (web=0)
+  mod_php: 1 (8.4)
+  ioc hits: 1 (crashes=1 spawned=0 webshells=0)
+
+Action: update PHP to 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 or the distro build
+listing CVE-2026-109618, then restart every worker. On shared hosting, ask the
+provider and switch the site to the newest branch they offer.
+Interim, in php.ini, the FPM pool or the server config (not .user.ini):
+  memory_limit = -1                      (cap memory with cgroups instead)
+  session.upload_progress.enabled = 0
+  fatal_error_backtraces = 0             (8.5 only)
+  pm.max_requests = 1                    (FPM; breaks the same-worker reuse)
+  Optionally block multipart/form-data at the web server or WAF, if the site
+  needs no uploads. None of this makes the host safe; only the update does.
+IoCs found: preserve logs, look for new files in web roots and cron, rotate secrets.

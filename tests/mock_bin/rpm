@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Mock rpm for tests.
+#   TEST_RPM_OWNER="path=name=version-release ..."  for rpm -qf
+#   TEST_RPM_CHANGELOG                              for rpm -q --changelog
+if [ "${1:-}" = "-qf" ]; then
+  for spec in ${TEST_RPM_OWNER:-}; do
+    IFS='=' read -r p name ver <<< "$spec"
+    if [ "$p" = "${2:-}" ]; then printf '%s %s\n' "$name" "$ver"; exit 0; fi
+  done
+  echo "file ${2:-} is not owned by any package"
+  exit 1
+fi
+if [ "${1:-}" = "-q" ] && [ "${2:-}" = "--changelog" ]; then
+  [ -n "${TEST_RPM_CHANGELOG:-}" ] || exit 1
+  printf '%b\n' "$TEST_RPM_CHANGELOG"
+  exit 0
+fi
+exit 1

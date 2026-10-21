@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Mock dpkg for tests.  --compare-versions is delegated to the real dpkg.
+# TEST_DPKG_OWNER="path=package=version ..." maps a binary to its package.
+if [ "${1:-}" = "--compare-versions" ]; then
+  shift
+  exec /usr/bin/dpkg --compare-versions "$@"
+fi
+if [ "${1:-}" = "-S" ]; then
+  for spec in ${TEST_DPKG_OWNER:-}; do
+    IFS='=' read -r p name _ <<< "$spec"
+    if [ "$p" = "${2:-}" ]; then printf '%s: %s\n' "$name" "$p"; exit 0; fi
+  done
+  echo "dpkg-query: no path found matching pattern ${2:-}" >&2
+  exit 1
+fi
+exit 1

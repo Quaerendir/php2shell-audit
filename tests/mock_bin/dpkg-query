@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Mock `dpkg-query -W -f='${Version}' PKG` driven by TEST_DPKG_OWNER.
+pkg="${*: -1}"
+for spec in ${TEST_DPKG_OWNER:-}; do
+  IFS='=' read -r _ name ver <<< "$spec"
+  if [ "$name" = "$pkg" ]; then printf '%s' "$ver"; exit 0; fi
+done
+exit 1

@@ -1,0 +1,13 @@
+# editor / OS
+*.swp
+*.swo
+.DS_Store
+.idea/
+.vscode/
+
+# runtime artefacts
+*.log
+*.tmp
+*.out
+audit-*.json
+audit-*.txt

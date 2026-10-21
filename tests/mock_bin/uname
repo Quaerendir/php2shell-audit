@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Mock uname for tests.  Override with TEST_UNAME_* env vars.
+case "${1:-}" in
+  -m) echo "${TEST_UNAME_M:-x86_64}" ;;
+  -n) echo "${TEST_UNAME_N:-testhost}" ;;
+  *)  echo "unknown" ;;
+esac
