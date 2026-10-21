@@ -80,7 +80,7 @@ fi
 LC_ALL=C
 export PATH LC_ALL
 
-VERSION="1.0.0"
+VERSION="1.0.1"
 
 # Every file the audit reads lives under $R. Empty on a real host; the tests
 # point it at a fixture tree. Like the PATH hook, ignored for root.
@@ -208,6 +208,7 @@ matrix_fixed() {
 }
 
 FIX_RE='CVE-2026-109618|CVE-2026-109619|php2shell'
+FIX_CUTOFF=20261001
 
 # Package data for one binary (path without $R). Sets P_NAME P_VERSION
 # P_KIND P_CHANGELOG (fixed / absent / unreadable / none).
@@ -402,7 +403,11 @@ for f in "${CANDIDATES[@]}"; do
     warn "${f}: not root-owned or group/world writable, not executed"
     continue
   fi
-  vline="$(run_php "$f" -v | grep -m1 -oE 'PHP [0-9]+\.[0-9]+\.[0-9]+[^ ]*( \([a-z0-9-]+\))?' || true)"
+  vout="$(run_php "$f" -v || true)"
+  vline="$(printf '%s\n' "$vout" | grep -m1 -oE 'PHP [0-9]+\.[0-9]+\.[0-9]+[^ ]*( \([a-z0-9-]+\))?' || true)"
+  # Build date from "(built: Sep  7 2026 17:10:44)", as YYYYMMDD.
+  built="$(printf '%s\n' "$vout" | grep -m1 -oE 'built: [A-Z][a-z]{2} +[0-9]{1,2} [0-9]{4}' | sed 's/^built: //' || true)"
+  bdate=""; [ -n "$built" ] && bdate="$(date -d "$built" +%Y%m%d 2>/dev/null || true)"
   if [[ ! "$vline" =~ ^PHP\ ([0-9]+)\.([0-9]+)\.([0-9]+)([^ ]*)( \(([a-z0-9-]+)\))?$ ]]; then
     warn "${f#"$R"}: no PHP version from -v, skipped"
     continue
@@ -435,7 +440,26 @@ for f in "${CANDIDATES[@]}"; do
       status="UNKNOWN";    detail="${P_NAME} ${P_VERSION}: changelog not readable, a backport is possible; ${UP_DETAIL}"
     fi
   else
-    detail="not package-managed (custom build): ${UP_DETAIL}"
+    case "${f#"$R"}" in
+      /opt/alt/*|/opt/cpanel/*|/opt/remi/*|/opt/plesk/*)
+        # Vendor builds (CloudLinux alt-php, cPanel ea-php, Remi, Plesk) keep
+        # a version below upstream after a backport (ea-php84 8.4.26 is
+        # fixed). Inside CageFS rpm cannot see them, so the version decides
+        # nothing.
+        status="UNKNOWN"
+        detail="vendor build, package data not visible (CageFS?): backports keep the version; ${UP_DETAIL}"
+        ;;
+      *)
+        detail="not package-managed (custom build): ${UP_DETAIL}"
+        ;;
+    esac
+  fi
+  # A build compiled before any fix existed cannot carry a backport. The
+  # cutoff leaves room for an embargoed early fix (distro lists get <= 14
+  # days; the release was 2026-10-21).
+  if [ "$status" = "UNKNOWN" ] && [ "$UP_STATUS" = "VULNERABLE" ] && \
+     [ -n "$bdate" ] && [ "$bdate" -lt "$FIX_CUTOFF" ]; then
+    status="VULNERABLE"; detail="built ${bdate}, before any fix existed; ${UP_DETAIL}"
   fi
 
   web=0

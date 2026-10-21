@@ -2,6 +2,14 @@
 
 All notable changes to `php2shell-audit` are documented here.
 
+## [1.0.1] — 2026-10-22
+
+### Fixed
+- Vendor builds under `/opt/alt` (CloudLinux alt-php), `/opt/cpanel` (ea-php), `/opt/remi` and `/opt/plesk` with no visible package data are now UNKNOWN, not VULNERABLE. Vendors backport without reaching the upstream version (ea-php84 is fixed at 8.4.26), and inside CageFS `rpm` cannot see these packages. Found on a CloudLinux/LiteSpeed shared host.
+
+### Added
+- Build-date rule: a build that would otherwise be UNKNOWN is VULNERABLE when `php -v` says it was built before 2026-10-01. Such a build cannot carry a backport; the cutoff leaves room for embargoed early fixes.
+
 ## [1.0.0] — 2026-10-22
 
 ### Added

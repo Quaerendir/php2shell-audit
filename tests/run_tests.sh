@@ -28,7 +28,7 @@ fake_php() {
   cat > "$file" <<EOF
 #!/bin/sh
 case "\$1" in
-  -v) echo "PHP ${ver} (${sapi}) (built: Oct 21 2026 10:00:00) (NTS)"
+  -v) echo "PHP ${ver} (${sapi}) (built: ${TEST_PHP_BUILT-Oct 21 2026} 10:00:00) (NTS)"
       echo "Copyright (c) The PHP Group" ;;
   -r|-q) printf 'memory_limit=%s\nsession.upload_progress.enabled=%s\nfatal_error_backtraces=%s\npost_max_size=8M\nfile_uploads=1\nsession_ext=1\n' \\
         "\${TEST_INI_ML-128M}" "\${TEST_INI_UP-1}" "\${TEST_INI_FEB-<unset>}" ;;
@@ -227,6 +227,29 @@ run_case "Rocky 9 changelog with fix: PATCHED" "$ROCKY" "TEST_PHP=/usr/sbin/php-
 run_case "Rocky 9 changelog without fix: VULNERABLE" "$ROCKY" "TEST_PHP=/usr/sbin/php-fpm|8.3.19|fpm-fcgi" "$RPMOWN" \
   "TEST_RPM_CHANGELOG=* Mon Aug 10 2026 - 8.3.19-1\n- rebase" -- "verdict:VULNERABLE" "php_0_package:php-fpm 8.3.19-1.el9_7"
 run_case "Rocky 9 no changelog: UNKNOWN" "$ROCKY" "TEST_PHP=/usr/sbin/php-fpm|8.3.19|fpm-fcgi" "$RPMOWN" -- "verdict:UNKNOWN"
+
+# --- vendor builds: CloudLinux alt-php, cPanel ea-php ----------------------------
+ALT74="TEST_PHP=/opt/alt/php74/usr/bin/lsphp|7.4.33|litespeed"
+run_case "alt-php in CageFS, no package data: UNKNOWN" "$ROCKY" "$ALT74" \
+  -- "verdict:UNKNOWN" "rc:3" "php_0_status:UNKNOWN" "php_0_web:1"
+run_case "alt-php built in September: VULNERABLE" "$ROCKY" "$ALT74" "TEST_PHP_BUILT=Sep  7 2026" \
+  -- "verdict:VULNERABLE" "php_0_status:VULNERABLE"
+run_case "alt-php built 2026-10-01: still UNKNOWN" "$ROCKY" "$ALT74" "TEST_PHP_BUILT=Oct  1 2026" \
+  -- "verdict:UNKNOWN"
+run_case "Sury, no changelog, built in August: VULNERABLE" "$DEB12" \
+  "TEST_PHP=/usr/sbin/php-fpm8.4|8.4.20|fpm-fcgi" "$SURY" "TEST_PHP_BUILT=Aug 10 2026" -- "verdict:VULNERABLE"
+run_case "old build date never fails a fixed version" "$ARCH" "TEST_PHP=/usr/bin/php-cgi84|8.4.27|cgi-fcgi" \
+  "TEST_PHP_BUILT=Aug 10 2026" -- "verdict:PATCHED"
+run_case "alt-php changelog lists the fix: PATCHED" "$ROCKY" "$ALT74" \
+  "TEST_RPM_OWNER=/opt/alt/php74/usr/bin/lsphp=alt-php74-cli=7.4.33-81.el10" \
+  "TEST_RPM_CHANGELOG=- Fix CVE-2026-109618, CVE-2026-109619" -- "verdict:PATCHED"
+run_case "ea-php84 8.4.26 backport: PATCHED by changelog" "$ROCKY" \
+  "TEST_PHP=/opt/cpanel/ea-php84/root/usr/sbin/php-fpm|8.4.26|fpm-fcgi" \
+  "TEST_RPM_OWNER=/opt/cpanel/ea-php84/root/usr/sbin/php-fpm=ea-php84-php-fpm=8.4.26-2.cpanel" \
+  "TEST_RPM_CHANGELOG=- EA-13371: patch CVE-2026-109618 CVE-2026-109619" -- "verdict:PATCHED"
+run_case "alt-php CLI next to patched FPM: UNKNOWN stays non-web" "$ROCKY" \
+  "TEST_PHP=/opt/alt/php82/usr/bin/php|8.2.33|cli /usr/sbin/php-fpm|8.3.36|fpm-fcgi" \
+  -- "verdict:UNKNOWN" "php_builds_unknown:1" "php_1_status:UNKNOWN" "php_1_web:0"
 
 # --- interim settings (score only, never the verdict) ----------------------------
 run_case "no interim settings: 75" "$ARCH" "$CGI84" -- "php_0_interim:none" "risk_score:75"

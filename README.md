@@ -7,7 +7,7 @@
 ![Disclosed](https://img.shields.io/badge/fixed-2026--10--21-yellow?style=flat-square)
 ![Shell](https://img.shields.io/badge/shell-bash-4EAA25?style=flat-square&logo=gnu-bash)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
-![Version](https://img.shields.io/badge/version-1.0.0-informational?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.0.1-informational?style=flat-square)
 [![CI](https://github.com/Quaerendir/php2shell-audit/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/Quaerendir/php2shell-audit/actions/workflows/shellcheck.yml)
 
 Read-only audit script for **PHP2Shell**: **CVE-2026-109618** and **CVE-2026-109619**. Both are use-after-free bugs in the PHP engine itself. An unauthenticated attacker can get remote code execution as the web worker user, or read leftover worker memory, before any application code runs.
@@ -52,6 +52,8 @@ It only triages and changes nothing. It never sends a request, never runs a PoC 
   1. a changelog that names CVE-2026-109618/109619 or php2shell always wins (`changelog.Debian.gz`, also via `php8.x-common`; `rpm -q --changelog`)
   2. otherwise the distro matrix above
   3. otherwise the upstream thresholds; a distro build with no readable changelog stays UNKNOWN, because a backport is possible
+  4. vendor builds (`/opt/alt`, `/opt/cpanel`, `/opt/remi`, `/opt/plesk`) whose package data is not visible, as inside CloudLinux CageFS, are UNKNOWN too: vendors backport below the upstream number (cPanel's fixed ea-php84 is 8.4.26)
+  5. either kind of UNKNOWN becomes VULNERABLE when `php -v` shows a build date before 2026-10-01: such a build cannot carry a backport
 - **Works out what serves the web**: the SAPI (`cgi-fcgi`, `fpm-fcgi`, `litespeed`, `frankenphp`) and Apache `LoadModule php_module` lines. A `libphp8.4.so` ties mod_php to the 8.4 CLI; an unversioned `libphp.so` makes every CLI build count.
 - **Reports the interim settings** per build and per FPM pool: `memory_limit=-1`, `session.upload_progress.enabled=0`, `fatal_error_backtraces=0` on 8.5, `pm.max_requests=1`.
 - **Scans web roots** (`/var/www`, `/srv/www`, …; without root also `~/public_html`, `~/www`, `~/WWW`, `~/domains`) for per-directory ini overrides, PHP changed since `--since`, PHP in `uploads/`, and web-shell patterns.
@@ -167,7 +169,7 @@ pm.max_requests = 1                 ; breaks the same-worker reuse
 ## Tests
 
 ```bash
-bash tests/run_tests.sh   # 55 cases: fake PHP builds + mocked dpkg/rpm/ps/journalctl; must not run as root
+bash tests/run_tests.sh   # 63 cases: fake PHP builds + mocked dpkg/rpm/ps/journalctl; must not run as root
 ```
 
 The test hooks (`PHP2SHELL_TEST_PATH`, `PHP2SHELL_TEST_ROOT`) are ignored when EUID is 0. Every JSON case also asserts the mocked hostname, which catches mocks silently bypassed by the pinned `PATH`. The web-shell fixture is assembled from pieces so antivirus scanners don't lock the test file.
