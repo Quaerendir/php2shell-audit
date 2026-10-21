@@ -340,14 +340,20 @@ kv "distro" "${OS_PRETTY:-unknown}"
 # System prefixes only: as root the script executes what it finds, so it
 # never looks in home directories on its own (use --php for that).
 CANDIDATES=()
-for g in /usr/bin/php /usr/bin/php[0-9]* /usr/bin/php-cgi* /usr/bin/php.bin* \
-         /usr/sbin/php-fpm* /usr/local/bin/php* /usr/local/sbin/php-fpm* \
-         /usr/local/php*/bin/php /usr/local/php*/bin/php-cgi /usr/local/php*/sbin/php-fpm \
-         /opt/remi/php*/root/usr/bin/php /opt/remi/php*/root/usr/sbin/php-fpm \
-         /opt/cpanel/ea-php*/root/usr/bin/php /opt/cpanel/ea-php*/root/usr/sbin/php-fpm \
-         /opt/alt/php*/usr/bin/php /opt/alt/php*/usr/bin/lsphp \
-         /opt/plesk/php/*/bin/php /opt/plesk/php/*/sbin/php-fpm \
-         /usr/local/lsws/lsphp*/bin/lsphp /usr/local/bin/frankenphp /usr/bin/frankenphp; do
+# Quoted, so each pattern is expanded once, under $R, and not first against
+# the live filesystem.
+PHP_GLOBS=(
+  '/usr/bin/php' '/usr/bin/php[0-9]*' '/usr/bin/php-cgi*' '/usr/bin/php.bin*'
+  '/usr/sbin/php-fpm*' '/usr/local/bin/php*' '/usr/local/sbin/php-fpm*'
+  '/usr/local/php*/bin/php' '/usr/local/php*/bin/php-cgi' '/usr/local/php*/sbin/php-fpm'
+  '/opt/remi/php*/root/usr/bin/php' '/opt/remi/php*/root/usr/sbin/php-fpm'
+  '/opt/cpanel/ea-php*/root/usr/bin/php' '/opt/cpanel/ea-php*/root/usr/sbin/php-fpm'
+  '/opt/alt/php*/usr/bin/php' '/opt/alt/php*/usr/bin/lsphp'
+  '/opt/plesk/php/*/bin/php' '/opt/plesk/php/*/sbin/php-fpm'
+  '/usr/local/lsws/lsphp*/bin/lsphp' '/usr/local/bin/frankenphp' '/usr/bin/frankenphp'
+)
+for g in "${PHP_GLOBS[@]}"; do
+  # shellcheck disable=SC2086  # $g is a glob pattern and must expand here
   for f in "$R"$g; do
     [ -f "$f" ] && [ -x "$f" ] || continue
     case "${f##*/}" in
