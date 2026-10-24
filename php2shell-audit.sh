@@ -35,6 +35,9 @@
 #   - Reports the interim settings (memory_limit=-1, upload progress off,
 #     fatal_error_backtraces off on 8.5, FPM pm.max_requests=1).
 #   - Scans web roots for per-directory ini overrides and web shells.
+#   - Checks CVE-2026-115560 (session upload progress + runtime serialize
+#     handler switch, NOT fixed by the 2026-10-21 releases) as a separate
+#     cve_115560 result; it never changes the verdict or the exit code.
 #   - Hunts logs for PHP worker crashes and shells spawned by PHP workers.
 #   - Computes a risk score and prints a verdict (PATCHED / MITIGATED /
 #     VULNERABLE / UNKNOWN / NOT_APPLICABLE).
@@ -80,7 +83,7 @@ fi
 LC_ALL=C
 export PATH LC_ALL
 
-VERSION="1.0.1"
+VERSION="1.1.0"
 
 # Every file the audit reads lives under $R. Empty on a real host; the tests
 # point it at a fixture tree. Like the PATH hook, ignored for root.
@@ -252,7 +255,7 @@ package_info() {
 
 # Read-only ini probe. array() keeps it valid on PHP 5.4.
 # shellcheck disable=SC2016  # PHP code, $k and $v are PHP variables
-INI_PROBE='foreach (array("memory_limit","session.upload_progress.enabled","fatal_error_backtraces","post_max_size","file_uploads") as $k) { $v = ini_get($k); echo $k, "=", ($v === false ? "<unset>" : $v), "\n"; } echo "session_ext=", (extension_loaded("session") ? 1 : 0), "\n";'
+INI_PROBE='foreach (array("memory_limit","session.upload_progress.enabled","fatal_error_backtraces","post_max_size","file_uploads","session.serialize_handler") as $k) { $v = ini_get($k); echo $k, "=", ($v === false ? "<unset>" : $v), "\n"; } echo "session_ext=", (extension_loaded("session") ? 1 : 0), "\n";'
 
 ini_val() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -n1; }
 
@@ -369,7 +372,7 @@ for f in "${EXTRA_PHP[@]}"; do CANDIDATES+=("$f"); done
 
 declare -A SEEN
 B_PATH=(); B_VER=(); B_SAPI=(); B_STATUS=(); B_DETAIL=(); B_WEB=(); B_BRANCH=()
-B_PKG=(); B_ML=(); B_UP=(); B_FEB=(); B_INTERIM=()
+B_PKG=(); B_ML=(); B_UP=(); B_FEB=(); B_INTERIM=(); B_SH=(); B_UPSTATE=()
 
 # mod_php: LoadModule lines decide which branch Apache runs in-process.
 MOD_PHP=0; MOD_PHP_BRANCHES=""; MOD_PHP_ANY=0
@@ -469,7 +472,7 @@ for f in "${CANDIDATES[@]}"; do
   case " ${MOD_PHP_BRANCHES} " in *" ${branch} "*) web=1 ;; esac
   [ "$MOD_PHP_ANY" -eq 1 ] && [ "$sapi" = "cli" ] && web=1
 
-  ml=""; up=""; feb=""; interim="n/a"
+  ml=""; up=""; feb=""; interim="n/a"; sh_val=""; sess=""
   if [ "$sapi" = "cli" ] || [ "$sapi" = "cgi-fcgi" ]; then
     if [ "$sapi" = "cli" ]; then
       ini="$(run_php "$f" -r "$INI_PROBE" || true)"
@@ -481,6 +484,7 @@ for f in "${CANDIDATES[@]}"; do
     up="$(ini_val "$ini" session.upload_progress.enabled)"
     feb="$(ini_val "$ini" fatal_error_backtraces)"
     sess="$(ini_val "$ini" session_ext)"
+    sh_val="$(ini_val "$ini" session.serialize_handler)"
     if [ -n "$ml" ]; then
       up_off=1; ini_on "$up" && [ "$sess" != "0" ] && up_off=0
       feb_off=1; [ "$branch" = "8.5" ] && ini_on "$feb" && feb_off=0
@@ -495,6 +499,13 @@ for f in "${CANDIDATES[@]}"; do
   B_PATH+=("${f#"$R"}"); B_VER+=("$ver"); B_SAPI+=("$sapi"); B_STATUS+=("$status")
   B_DETAIL+=("$detail"); B_WEB+=("$web"); B_BRANCH+=("$branch")
   B_PKG+=("${P_NAME:+$P_NAME $P_VERSION}"); B_ML+=("$ml"); B_UP+=("$up"); B_FEB+=("$feb"); B_INTERIM+=("$interim")
+  # Upload progress as the CVE-2026-115560 check needs it: on / off / unknown.
+  # Only a probed CLI/CGI build, or an FPM pool set, can say.
+  upstate="unknown"
+  if [ -n "$ml" ]; then
+    upstate="on"; { ! ini_on "$up" || [ "$sess" = "0" ]; } && upstate="off"
+  fi
+  B_SH+=("$sh_val"); B_UPSTATE+=("$upstate")
 
   jset "php_${n}_path"    "${f#"$R"}"
   jset "php_${n}_version" "$ver"
@@ -522,7 +533,7 @@ jset php_builds "$n"
 
 # ------------------------------------------------------------------ interim settings
 hdr "Interim settings (reduce exposure, do not make a host safe)"
-POOLS=0; POOL_ML=0; POOL_UP=0; POOL_MAXREQ=0
+POOLS=0; POOL_ML=0; POOL_UP=0; POOL_MAXREQ=0; POOL_SH=0
 for f in "$R"/etc/php/*/fpm/pool.d/*.conf "$R"/etc/php-fpm.d/*.conf \
          "$R"/etc/opt/remi/php*/php-fpm.d/*.conf "$R"/opt/cpanel/ea-php*/root/etc/php-fpm.d/*.conf \
          "$R"/opt/alt/php*/etc/php-fpm.d/*.conf "$R"/opt/plesk/php/*/etc/php-fpm.d/*.conf; do
@@ -531,11 +542,13 @@ for f in "$R"/etc/php/*/fpm/pool.d/*.conf "$R"/etc/php-fpm.d/*.conf \
   grep -qiE '^[[:space:]]*php_admin_value\[memory_limit\][[:space:]]*=[[:space:]]*-1' "$f" && POOL_ML=$((POOL_ML+1))
   grep -qiE '^[[:space:]]*php_admin_flag\[session\.upload_progress\.enabled\][[:space:]]*=[[:space:]]*(off|0|false|no)' "$f" && POOL_UP=$((POOL_UP+1))
   grep -qiE '^[[:space:]]*pm\.max_requests[[:space:]]*=[[:space:]]*1[[:space:]]*$' "$f" && POOL_MAXREQ=$((POOL_MAXREQ+1))
+  grep -qiE '^[[:space:]]*php(_admin)?_value\[session\.serialize_handler\][[:space:]]*=[[:space:]]*(php_binary|php_serialize)' "$f" && POOL_SH=$((POOL_SH+1))
 done
 jset fpm_pools                  "$POOLS"
 jset fpm_pools_memory_limit_off "$POOL_ML"
 jset fpm_pools_upload_progress_off "$POOL_UP"
 jset fpm_pools_max_requests_1   "$POOL_MAXREQ"
+jset fpm_pools_serialize_handler_nonphp "$POOL_SH"
 
 i=0
 while [ "$i" -lt "$n" ]; do
@@ -563,7 +576,11 @@ if [ "$SCAN_WEB" -eq 1 ] && [ "${#WEBROOTS[@]}" -eq 0 ]; then
 fi
 [ "$SCAN_WEB" -eq 0 ] && WEBROOTS=()
 
-PERDIR_INI=0; WEBSHELLS=0; RECENT_PHP=0; UPLOAD_PHP=0
+PERDIR_INI=0; WEBSHELLS=0; RECENT_PHP=0; UPLOAD_PHP=0; SH_CODE=0; SH_CODE_LIST=""; SH_PERDIR=0
+# CVE-2026-115560 needs an application that switches the session serialize
+# handler at runtime, and a per-directory ini that sets one to a non-php value.
+SH_CODE_RE='ini_set[[:space:]]*\([[:space:]]*["'\'']session\.serialize_handler["'\'']'
+SH_PERDIR_RE='^[^;#]*session\.serialize_handler[^;#]*(php_binary|php_serialize)'
 # shellcheck disable=SC2016  # regex for literal $_GET etc.
 WEBSHELL_RE='eval\(\s*(base64_decode|gzinflate|str_rot13|gzuncompress)|assert\(\s*\$_|(system|passthru|shell_exec|exec|popen|proc_open)\(\s*\$_(GET|POST|REQUEST|COOKIE|SERVER)'
 if [ "${#WEBROOTS[@]}" -gt 0 ]; then
@@ -579,6 +596,12 @@ if [ "${#WEBROOTS[@]}" -gt 0 ]; then
             find "$w" -type f -path '*/uploads/*' -name '*.php*' -size -4M -print0 2>/dev/null; } \
           | xargs -0 -r grep -lE "$WEBSHELL_RE" 2>/dev/null | sort -u)"
     sc=0; [ -n "$s" ] && sc="$(printf '%s\n' "$s" | wc -l)"
+    sc2="$(find "$w" -type f -name '*.php' -size -2M -print0 2>/dev/null | xargs -0 -r grep -lE "$SH_CODE_RE" 2>/dev/null | sort -u | head -n 20)"
+    shc=0; [ -n "$sc2" ] && shc="$(printf '%s\n' "$sc2" | wc -l)"
+    shp="$(find "$w" -maxdepth 8 \( -name .user.ini -o -name .htaccess -o -name php.ini \) -type f 2>/dev/null \
+          | while read -r x; do grep -qiE "$SH_PERDIR_RE" "$x" 2>/dev/null && echo "$x"; done | wc -l)"
+    SH_CODE=$((SH_CODE+shc)); SH_PERDIR=$((SH_PERDIR+shp))
+    [ -n "$sc2" ] && SH_CODE_LIST="${SH_CODE_LIST:+$SH_CODE_LIST }$(printf '%s\n' "$sc2" | head -n 3 | sed "s|^$R||" | tr '\n' ' ')"
     PERDIR_INI=$((PERDIR_INI+c)); RECENT_PHP=$((RECENT_PHP+r)); UPLOAD_PHP=$((UPLOAD_PHP+u)); WEBSHELLS=$((WEBSHELLS+sc))
     kv "${w#"$R"}" "per-dir ini overrides=${c} php changed since ${SINCE}=${r} php in uploads=${u} web shell patterns=${sc}"
     [ "$sc" -gt 0 ] && printf '%s\n' "$s" | head -n 10 | while read -r x; do bad "web shell pattern: ${x#"$R"}"; done
@@ -695,6 +718,63 @@ fi
 jset verdict "$final"
 jset verdict_reason "$reason"
 
+# ------------------------------------------------------------------ CVE-2026-115560
+#
+# Separate from PHP2Shell and NOT fixed by 8.5.12/8.4.27/8.3.36/8.2.35: PHP
+# only published a mitigation (session.upload_progress.enabled=0) on
+# 2026-10-23 and will fix it in the next regular release. Exposed only when
+# session.serialize_handler is php_binary/php_serialize in the config, the
+# application ini_set()s it to "php" before session_start(), and session
+# upload progress is on. This never changes the verdict or the exit code: a
+# patched build can still be exposed to it.
+S_WEB=0; S_ON=0; S_UNK=0; S_NONPHP=0; S_SHUNK=0
+i=0
+while [ "$i" -lt "$n" ]; do
+  if [ "${B_WEB[i]}" -eq 1 ] && [ "${B_STATUS[i]}" != "NOT_APPLICABLE" ]; then
+    S_WEB=$((S_WEB+1))
+    st="${B_UPSTATE[i]}"
+    # An FPM pool set that turns upload progress off overrides the global ini.
+    [ "${B_SAPI[i]}" = "fpm-fcgi" ] && [ "$POOLS" -gt 0 ] && [ "$POOL_UP" -eq "$POOLS" ] && st="off"
+    case "$st" in
+      on)      S_ON=$((S_ON+1)) ;;
+      unknown) S_UNK=$((S_UNK+1)) ;;
+    esac
+    case "${B_SH[i]}" in
+      php_binary|php_serialize) S_NONPHP=1 ;;
+      "") S_SHUNK=1 ;;
+    esac
+  fi
+  i=$((i+1))
+done
+[ "$POOL_SH" -gt 0 ] || [ "$SH_PERDIR" -gt 0 ] && S_NONPHP=1
+
+SESS_STATUS="NOT_EXPOSED"; SESS_REASON=""
+if [ "$S_WEB" -eq 0 ]; then
+  SESS_STATUS="NOT_APPLICABLE"; SESS_REASON="no PHP build serves the web"
+elif [ "$S_ON" -eq 0 ] && [ "$S_UNK" -eq 0 ]; then
+  SESS_STATUS="MITIGATED"; SESS_REASON="session upload progress is off on every web-serving build"
+elif [ "${#WEBROOTS[@]}" -eq 0 ]; then
+  SESS_STATUS="CHECK"; SESS_REASON="no web root scanned: cannot see whether an application switches the serialize handler"
+elif [ "$SH_CODE" -gt 0 ] && [ "$S_NONPHP" -eq 1 ]; then
+  if [ "$S_ON" -gt 0 ]; then
+    SESS_STATUS="EXPOSED"; SESS_REASON="${SH_CODE} file(s) ini_set() the serialize handler, config sets php_binary/php_serialize, upload progress is on"
+  else
+    SESS_STATUS="CHECK"; SESS_REASON="${SH_CODE} file(s) ini_set() the serialize handler, config sets php_binary/php_serialize, upload progress state unknown"
+  fi
+elif [ "$SH_CODE" -gt 0 ] && [ "$S_SHUNK" -eq 1 ]; then
+  SESS_STATUS="CHECK"; SESS_REASON="${SH_CODE} file(s) ini_set() the serialize handler; the configured handler is not visible"
+elif [ "$SH_CODE" -gt 0 ]; then
+  SESS_STATUS="NOT_EXPOSED"; SESS_REASON="${SH_CODE} file(s) ini_set() the serialize handler, but the configured handler is already php"
+else
+  SESS_STATUS="NOT_EXPOSED"; SESS_REASON="no ini_set() of session.serialize_handler in the scanned web roots"
+fi
+jset cve_115560                 "$SESS_STATUS"
+jset cve_115560_reason          "$SESS_REASON"
+jset cve_115560_code_files      "$SH_CODE"
+jset cve_115560_perdir_nonphp   "$SH_PERDIR"
+jset cve_115560_upload_progress_on "$S_ON"
+jset cve_115560_upload_progress_unknown "$S_UNK"
+
 # ------------------------------------------------------------------ risk scoring
 #
 # Score model (0..100). Tuned so that:
@@ -752,6 +832,8 @@ fi
 
 if [ "$QUIET" -eq 1 ]; then
   printf '%s (%d/100): %s\n' "$final" "$SCORE" "$reason"
+  # Second line, so a caller reading the first token keeps working.
+  [ "$SESS_STATUS" != "NOT_APPLICABLE" ] && printf 'CVE-2026-115560 %s: %s\n' "$SESS_STATUS" "$SESS_REASON"
   exit "$exit_code"
 fi
 
@@ -762,6 +844,7 @@ kv "risk score" "$SCORE / 100"
 kv "builds"     "total=$n patched=$PATCHED_N vulnerable=$VULN (web=$VULN_WEB) unknown=$UNK (web=$UNK_WEB)"
 kv "mod_php"    "$MOD_PHP${MOD_PHP_BRANCHES:+ (${MOD_PHP_BRANCHES# })}"
 kv "ioc hits"   "$IOC_HITS (crashes=$CRASH_HITS spawned=$SPAWN_HITS webshells=$WEBSHELLS)"
+kv "CVE-2026-115560" "$SESS_STATUS: $SESS_REASON"
 
 say ""
 case "$final" in
@@ -793,6 +876,15 @@ case "$final" in
   UNKNOWN)
     say "Action: check the vendor advisory for the exact package (DSA-6574-1, USN-8948-1,"
     say "  RHSA). Treat as VULNERABLE on anything public-facing until proven otherwise."
+    ;;
+esac
+case "$SESS_STATUS" in
+  EXPOSED|CHECK)
+    say ""
+    say "CVE-2026-115560 (separate from PHP2Shell; the 2026-10-21 updates do NOT fix it):"
+    say "  set session.upload_progress.enabled = 0 in php.ini, the FPM pool or the server"
+    say "  config (not .user.ini / ini_set()), restart every worker, until PHP ships its fix."
+    [ -n "$SH_CODE_LIST" ] && say "  ini_set() of the serialize handler in: ${SH_CODE_LIST}"
     ;;
 esac
 [ "$IOC_HITS" -gt 0 ] && \

@@ -30,8 +30,8 @@ fake_php() {
 case "\$1" in
   -v) echo "PHP ${ver} (${sapi}) (built: ${TEST_PHP_BUILT-Oct 21 2026} 10:00:00) (NTS)"
       echo "Copyright (c) The PHP Group" ;;
-  -r|-q) printf 'memory_limit=%s\nsession.upload_progress.enabled=%s\nfatal_error_backtraces=%s\npost_max_size=8M\nfile_uploads=1\nsession_ext=1\n' \\
-        "\${TEST_INI_ML-128M}" "\${TEST_INI_UP-1}" "\${TEST_INI_FEB-<unset>}" ;;
+  -r|-q) printf 'memory_limit=%s\nsession.upload_progress.enabled=%s\nfatal_error_backtraces=%s\npost_max_size=8M\nfile_uploads=1\nsession_ext=1\nsession.serialize_handler=%s\n' \\
+        "\${TEST_INI_ML-128M}" "\${TEST_INI_UP-1}" "\${TEST_INI_FEB-<unset>}" "\${TEST_INI_SH-php}" ;;
 esac
 EOF
   chmod +x "$file"
@@ -286,6 +286,54 @@ run_case "worker crashes in the journal" "$ARCH" "$CGI84" "TEST_ARGS=--json --no
 run_case "shell spawned by php-fpm" "$ARCH" "$CGI84" "TEST_ARGS=--json --no-webroot" \
   "TEST_PS=900:1:php-fpm8.4 901:900:php-fpm8.4 902:901:sh 903:902:curl 950:500:bash" \
   -- "spawn_hits:1" "ioc_hits:1"
+
+# --- CVE-2026-115560: session upload progress + runtime serialize handler -------
+# Not fixed by the PHP2Shell releases, so it is reported next to the verdict
+# and never changes it.
+P84OK="TEST_PHP=/usr/bin/php-cgi84|8.4.27|cgi-fcgi"
+SH_APP='<?php ini_set("session.serialize_handler", "php"); session_start();'
+run_case "115560: patched PHP, php_serialize + ini_set + upload progress on: EXPOSED" "$ARCH" "$P84OK" \
+  "TEST_INI_SH=php_serialize" "TEST_WEB_FILES=app.php" "TEST_WEB_CONTENT=$SH_APP" \
+  -- "cve_115560:EXPOSED" "cve_115560_code_files:1" "verdict:PATCHED" "rc:0"
+run_case "115560: upload progress off: MITIGATED" "$ARCH" "$P84OK" \
+  "TEST_INI_SH=php_binary" "TEST_INI_UP=0" "TEST_WEB_FILES=app.php" "TEST_WEB_CONTENT=$SH_APP" \
+  -- "cve_115560:MITIGATED"
+run_case "115560: configured handler is already php: NOT_EXPOSED" "$ARCH" "$P84OK" \
+  "TEST_WEB_FILES=app.php" "TEST_WEB_CONTENT=$SH_APP" -- "cve_115560:NOT_EXPOSED" "cve_115560_code_files:1"
+run_case "115560: non-php handler but no ini_set in code: NOT_EXPOSED" "$ARCH" "$P84OK" \
+  "TEST_INI_SH=php_serialize" "TEST_WEB_FILES=index.php" -- "cve_115560:NOT_EXPOSED" "cve_115560_code_files:0"
+run_case "115560: no web root scanned: CHECK" "$ARCH" "$P84OK" "TEST_INI_SH=php_serialize" \
+  "TEST_ARGS=--no-hunt --json --no-webroot" -- "cve_115560:CHECK"
+run_case "115560: only CLI builds: NOT_APPLICABLE" "$ARCH" "TEST_PHP=/usr/bin/php|8.4.24|cli" \
+  -- "cve_115560:NOT_APPLICABLE"
+run_case "115560: FPM pools pin upload progress off: MITIGATED" "$ARCH" "TEST_PHP=/usr/sbin/php-fpm8.4|8.4.27|fpm-fcgi" \
+  "TEST_FPM_POOL=[www]\nphp_admin_flag[session.upload_progress.enabled] = off" "TEST_WEB_FILES=app.php" "TEST_WEB_CONTENT=$SH_APP" \
+  -- "cve_115560:MITIGATED"
+run_case "115560: FPM, pool sets php_serialize, state unknown: CHECK" "$ARCH" "TEST_PHP=/usr/sbin/php-fpm8.4|8.4.27|fpm-fcgi" \
+  "TEST_FPM_POOL=[www]\nphp_admin_value[session.serialize_handler] = php_serialize" "TEST_WEB_FILES=app.php" "TEST_WEB_CONTENT=$SH_APP" \
+  -- "cve_115560:CHECK" "fpm_pools_serialize_handler_nonphp:1"
+run_case "115560: FPM, handler not visible: CHECK" "$ARCH" "TEST_PHP=/usr/sbin/php-fpm8.4|8.4.27|fpm-fcgi" \
+  "TEST_WEB_FILES=app.php" "TEST_WEB_CONTENT=$SH_APP" -- "cve_115560:CHECK"
+run_case "115560: .htaccess sets php_binary, app switches it: EXPOSED" "$ARCH" "$P84OK" \
+  "TEST_WEB_FILES=.htaccess app.php" "TEST_WEB_CONTENT=php_value session.serialize_handler php_binary\n$SH_APP" \
+  -- "cve_115560:EXPOSED" "cve_115560_perdir_nonphp:1"
+run_case "115560: leaves an unfixed PHP2Shell verdict alone" "$ARCH" "$CGI84" \
+  "TEST_INI_SH=php_serialize" "TEST_WEB_FILES=app.php" "TEST_WEB_CONTENT=$SH_APP" \
+  -- "cve_115560:EXPOSED" "verdict:VULNERABLE" "rc:2" "risk_score:75"
+
+quiet_out=$(
+  qroot=$(mktemp -d "$TMP/root.XXXXXX")
+  export TEST_INI_SH=php_serialize TEST_OS_RELEASE="$FIXTURES/os-release-arch"
+  export TEST_PHP="/usr/bin/php-cgi84|8.4.27|cgi-fcgi" TEST_WEB_FILES=app.php TEST_WEB_CONTENT="$SH_APP"
+  build_root "$qroot"
+  PHP2SHELL_TEST_ROOT="$qroot" PHP2SHELL_TEST_PATH="$MOCK_BIN" "$SCRIPT" --quiet 2>/dev/null
+)
+if [ "$(printf '%s\n' "$quiet_out" | sed -n 1p | cut -d' ' -f1)" = "PATCHED" ] && \
+   printf '%s\n' "$quiet_out" | sed -n 2p | grep -q '^CVE-2026-115560 EXPOSED: '; then
+  echo "PASS: 115560 quiet mode keeps the verdict first and adds a second line"; pass=$((pass+1))
+else
+  printf 'FAIL: 115560 quiet mode output: %s\n' "$quiet_out"; fail_count=$((fail_count+1))
+fi
 
 # --- text mode, CLI, hardening --------------------------------------------------
 run_case "text report exits like JSON" "$ARCH" "$CGI84" "TEST_ARGS=--no-banner" -- "rc:2"

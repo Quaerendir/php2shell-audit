@@ -32,6 +32,7 @@
   builds: total=3 patched=0 vulnerable=3 (web=2) unknown=0 (web=0)
   mod_php: 1 (8.4)
   ioc hits: 1 (crashes=1 spawned=0 webshells=0)
+  CVE-2026-115560: NOT_EXPOSED: no ini_set() of session.serialize_handler in the scanned web roots
 
 Action: update PHP to 8.5.12 / 8.4.27 / 8.3.36 / 8.2.35 or the distro build
 listing CVE-2026-109618, then restart every worker. On shared hosting, ask the

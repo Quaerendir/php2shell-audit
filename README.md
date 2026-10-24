@@ -7,7 +7,7 @@
 ![Disclosed](https://img.shields.io/badge/fixed-2026--10--21-yellow?style=flat-square)
 ![Shell](https://img.shields.io/badge/shell-bash-4EAA25?style=flat-square&logo=gnu-bash)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
-![Version](https://img.shields.io/badge/version-1.0.1-informational?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.1.0-informational?style=flat-square)
 [![CI](https://github.com/Quaerendir/php2shell-audit/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/Quaerendir/php2shell-audit/actions/workflows/shellcheck.yml)
 
 Read-only audit script for **PHP2Shell**: **CVE-2026-109618** and **CVE-2026-109619**. Both are use-after-free bugs in the PHP engine itself. An unauthenticated attacker can get remote code execution as the web worker user, or read leftover worker memory, before any application code runs.
@@ -57,6 +57,7 @@ It only triages and changes nothing. It never sends a request, never runs a PoC 
 - **Works out what serves the web**: the SAPI (`cgi-fcgi`, `fpm-fcgi`, `litespeed`, `frankenphp`) and Apache `LoadModule php_module` lines. A `libphp8.4.so` ties mod_php to the 8.4 CLI; an unversioned `libphp.so` makes every CLI build count.
 - **Reports the interim settings** per build and per FPM pool: `memory_limit=-1`, `session.upload_progress.enabled=0`, `fatal_error_backtraces=0` on 8.5, `pm.max_requests=1`.
 - **Scans web roots** (`/var/www`, `/srv/www`, …; without root also `~/public_html`, `~/www`, `~/WWW`, `~/domains`) for per-directory ini overrides, PHP changed since `--since`, PHP in `uploads/`, and web-shell patterns.
+- **Checks CVE-2026-115560** (separate flaw, announced 2026-10-23, **not** fixed by the 2026-10-21 releases): session upload progress is on, the config sets `session.serialize_handler` to `php_binary`/`php_serialize`, and an application `ini_set()`s it to `php` before `session_start()`. Result in `cve_115560`; see below.
 - **Hunts** the journal and Apache/FPM/LiteSpeed error logs for worker crashes (`segfault`, `exited on signal 11`, `AH00052`), and the live process table for a shell or downloader whose parent is a PHP worker or Apache.
 - Produces a risk score from 0 to 100 and a verdict.
 
@@ -71,6 +72,20 @@ It runs fine **without root**, which is the normal case on shared hosting. It th
 - **NOT_APPLICABLE**: no PHP between 5.4.0 and the fixed releases.
 
 The interim settings and per-directory overrides **never change the verdict**. PHP says they reduce exposure but do not make a host safe, and that `.user.ini` and `ini_set()` apply too late. They only lower the score.
+
+### CVE-2026-115560 (reported next to the verdict)
+
+PHP published only a mitigation on 2026-10-23 (`session.upload_progress.enabled=0`) and will fix the flaw in the next regular release, so no build counts as patched for it and it **never changes the verdict, the exit code or the score**. A fully patched host can still be `EXPOSED`.
+
+| `cve_115560` | Meaning |
+|---|---|
+| `EXPOSED` | Upload progress is on, the config (global ini, FPM pool or `.htaccess`/`.user.ini`) sets `php_binary`/`php_serialize`, and PHP files in the web roots call `ini_set("session.serialize_handler", ...)` |
+| `CHECK` | Cannot rule it out: no web root scanned, upload progress state unknown (unprobed FPM build without pinned pools), or the configured handler is not visible |
+| `NOT_EXPOSED` | No `ini_set()` of the handler in the scanned roots, or the configured handler is already `php` |
+| `MITIGATED` | Upload progress is off on every web-serving build (global ini, or every FPM pool) |
+| `NOT_APPLICABLE` | No PHP build serves the web |
+
+In `--quiet` mode a second line `CVE-2026-115560 <status>: <reason>` follows the verdict line. The web root scan reads every `*.php` up to 2 MB, so it takes longer on large trees. Static code scanning can miss a handler switch in code that is generated or obfuscated.
 
 ## Usage
 

@@ -2,6 +2,16 @@
 
 All notable changes to `php2shell-audit` are documented here.
 
+## [1.1.0] — 2026-10-24
+
+### Added
+- CVE-2026-115560 check, reported separately as `cve_115560` (`EXPOSED` / `CHECK` / `NOT_EXPOSED` / `MITIGATED` / `NOT_APPLICABLE`). PHP announced it on 2026-10-23 as a session upload progress flaw that the 2026-10-21 releases do not fix. Exposed when upload progress is on, the config sets `session.serialize_handler` to `php_binary`/`php_serialize` (global ini, FPM pool, `.htaccess`/`.user.ini`) and PHP files in the web roots `ini_set()` it before `session_start()`.
+- JSON keys `cve_115560`, `cve_115560_reason`, `cve_115560_code_files`, `cve_115560_perdir_nonphp`, `cve_115560_upload_progress_on`, `cve_115560_upload_progress_unknown`, `fpm_pools_serialize_handler_nonphp`.
+- `--quiet` prints a second line `CVE-2026-115560 <status>: <reason>`; the first line is unchanged.
+
+### Notes
+- The new check never changes the verdict, the exit code or the risk score: no build can be patched for it yet.
+
 ## [1.0.1] — 2026-10-22
 
 ### Fixed
