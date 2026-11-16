@@ -397,5 +397,20 @@ else
   echo "PASS: os-release was not executed"; pass=$((pass+1))
 fi
 
+# JSON field types depend on the key, not on the value: an all-digit hostname
+# and a version like "12" stay strings (and "007" stays valid JSON).
+printf 'ID=debian\nVERSION_ID="12"\nPRETTY_NAME="Debian GNU/Linux 12 (bookworm)"\n' > "$TMP/os-release-types"
+types_out=$(r=$(mktemp -d "$TMP/root.XXXXXX"); TEST_OS_RELEASE="$TMP/os-release-types" TEST_PHP="/usr/bin/php|8.4.24|cli" build_root "$r"
+  TEST_UNAME_N=007 PHP2SHELL_TEST_ROOT="$r" PHP2SHELL_TEST_PATH="$MOCK_BIN" "$SCRIPT" --json --no-hunt 2>/dev/null)
+if printf '%s' "$types_out" | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+bad=[k for k,v in d.items() if type(v) not in (str,int,type(None))]
+ok = not bad and d["hostname"]=="007" and d["distro_version"]=="12" and type(d["risk_score"]) is int
+sys.exit(0 if ok else 1)' 2>/dev/null; then
+  echo "PASS: JSON types: digit-only hostname and version are strings, counters are numbers"; pass=$((pass+1))
+else
+  printf 'FAIL: JSON types: %s\n' "$types_out"; fail_count=$((fail_count+1))
+fi
+
 printf '\nTotal: %d passed, %d failed\n' "$pass" "$fail_count"
 [ "$fail_count" -eq 0 ]

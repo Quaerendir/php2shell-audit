@@ -828,8 +828,18 @@ jset risk_score "$SCORE"
 
 # ------------------------------------------------------------------ output
 if [ "$JSON" -eq 1 ]; then
-  # Emit JSON. Keep it dependency-free; no jq needed.  Keys are sorted;
-  # values that look like non-negative integers are emitted as numbers.
+  # Emit JSON. Keep it dependency-free; no jq needed. Keys are sorted. The
+  # type of a field depends on its key, never on its value: the keys below
+  # are numbers (null when the value is not an integer, e.g. an unreadable
+  # sysctl), every other field is a string. Guessing from the value made
+  # "12" a number and "24.04" a string, and a hostname "007" invalid JSON.
+  json_number_key() {
+    # shellcheck disable=SC2254  # the patterns are meant to glob
+    case "$1" in
+      audit_as_root|mod_php|php_*_web|php_builds|php_builds_*|fpm_pools|fpm_pools_*|webroots_scanned|perdir_ini_overrides|php_changed_since|php_in_uploads|*_hits|eol_branch_serves_web|cve_115560_code_files|cve_115560_perdir_nonphp|cve_115560_upload_progress_*|risk_score) return 0 ;;
+    esac
+    return 1
+  }
   json_escape() {
     local s="$1"
     s="${s//\\/\\\\}"
@@ -845,8 +855,8 @@ if [ "$JSON" -eq 1 ]; then
   for k in "${sorted_keys[@]}"; do
     v="${J[$k]}"
     if [ $first -eq 1 ]; then first=0; else printf ','; fi
-    if [[ "$v" =~ ^[0-9]+$ ]]; then
-      printf '"%s":%s' "$k" "$v"
+    if json_number_key "$k"; then
+      if [[ "$v" =~ ^-?(0|[1-9][0-9]*)$ ]]; then printf '"%s":%s' "$k" "$v"; else printf '"%s":null' "$k"; fi
     else
       printf '"%s":"%s"' "$k" "$(json_escape "$v")"
     fi

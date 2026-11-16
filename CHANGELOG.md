@@ -12,6 +12,9 @@ All notable changes to `php2shell-audit` are documented here.
 - The changelog search could miss a listed fix: with `pipefail`, `grep -q` left at the first hit and the writer died of SIGPIPE, so a changelog larger than a pipe buffer read as "no match". The search now counts matches.
 - On bash 4.0-4.3 the script aborted with exit 1 (read by callers as MITIGATED) unless `--php` was given: an empty array expanded to an "unbound variable" error under `set -u`. Checked under bash 4.2 and 4.3.
 
+### Changed — JSON output (check your parsers)
+- The type of every JSON field now depends on its key, not on its value. Before, any value made only of digits was emitted as a number, so the same field was a number on one host and a string on another (`distro_version` 12 vs "24.04", `php_N_memory_limit`), and an all-digit hostname with a leading zero produced invalid JSON. Counters, flags and scores are numbers; sysctl-style values are numbers or `null` when unreadable (they used to be the string "unknown"); everything else is a string.
+
 ## [1.1.0] — 2026-10-24
 
 ### Added
