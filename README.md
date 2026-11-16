@@ -7,7 +7,7 @@
 ![Disclosed](https://img.shields.io/badge/fixed-2026--10--21-yellow?style=flat-square)
 ![Shell](https://img.shields.io/badge/shell-bash-4EAA25?style=flat-square&logo=gnu-bash)
 ![License](https://img.shields.io/badge/license-MIT-blue?style=flat-square)
-![Version](https://img.shields.io/badge/version-1.1.0-informational?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.2.0-informational?style=flat-square)
 [![CI](https://github.com/Quaerendir/php2shell-audit/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/Quaerendir/php2shell-audit/actions/workflows/shellcheck.yml)
 
 Read-only audit script for **PHP2Shell**: **CVE-2026-109618** and **CVE-2026-109619**. Both are use-after-free bugs in the PHP engine itself. An unauthenticated attacker can get remote code execution as the web worker user, or read leftover worker memory, before any application code runs.

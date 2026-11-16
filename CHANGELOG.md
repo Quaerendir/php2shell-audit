@@ -2,7 +2,7 @@
 
 All notable changes to `php2shell-audit` are documented here.
 
-## [Unreleased]
+## [1.2.0] — 2026-11-16
 
 ### Security
 - PHP binaries are now started from `/` with an empty environment. php-cgi loads a `php.ini` from the current directory, so running the audit as root from a directory another user can write to (a web root, `/tmp`) executed that user's `auto_prepend_file` or extension as root; `PHPRC` and `PHP_INI_SCAN_DIR` in the caller's environment had the same effect for every SAPI. Reproduced with the real php-cgi 8.3.

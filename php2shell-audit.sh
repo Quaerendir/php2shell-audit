@@ -84,7 +84,7 @@ fi
 LC_ALL=C
 export PATH LC_ALL
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 # Every file the audit reads lives under $R. Empty on a real host; the tests
 # point it at a fixture tree. Like the PATH hook, ignored for root.
