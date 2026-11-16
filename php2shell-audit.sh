@@ -67,7 +67,8 @@
 #
 # This script never sends a request, never runs the PoC and never changes
 # php.ini, pool configs or any other persistent state. It does execute the
-# PHP binaries it finds, with -v and a read-only ini_get() snippet.
+# PHP binaries it finds, with -v and a read-only ini_get() snippet, always
+# from / and with an empty environment.
 #
 
 set -u
@@ -133,6 +134,16 @@ bad()  { say "  - $*"; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# True when stdin has a line matching the extended regex $1. It counts instead
+# of using grep -q: under pipefail, grep -q leaving at the first hit kills the
+# writer with SIGPIPE and the pipeline then reads as "no match" as soon as the
+# changelog is larger than a pipe buffer.
+has_match() {
+  local n
+  n="$(grep -ciE "$1" 2>/dev/null)" || true
+  [ "${n:-0}" -gt 0 ]
+}
+
 # JSON accumulator (flat dict)
 declare -A J
 jset() { J["$1"]="$2"; }
@@ -155,15 +166,25 @@ ini_on() {
   return 1
 }
 
-# Run a found PHP binary with a time limit. stdin is closed so a php-cgi
-# that is not given a script cannot sit waiting for one.
-run_php() {
-  if have timeout; then
-    timeout 10 "$@" </dev/null 2>/dev/null
-  else
-    "$@" </dev/null 2>/dev/null
-  fi
+# Start a found PHP binary: from /, with an empty environment and a time
+# limit. php-cgi (unlike the CLI) loads a php.ini from the current directory,
+# and PHPRC / PHP_INI_SCAN_DIR point any SAPI at one, so an audit started in
+# a directory or shell someone else controls would run their
+# auto_prepend_file or extension as the auditor. stdin is left to the caller.
+php_exec() {
+  (
+    cd / || exit 126
+    if have timeout; then
+      exec env -i PATH="$PATH" LC_ALL=C timeout 10 "$@"
+    else
+      exec env -i PATH="$PATH" LC_ALL=C "$@"
+    fi
+  ) 2>/dev/null
 }
+
+# stdin is closed so a php-cgi that is not given a script cannot sit
+# waiting for one.
+run_php() { php_exec "$@" </dev/null; }
 
 # Upstream fix status for a PHP version "maj min pat". Thresholds are the
 # 2026-10-21 releases; 7.4-8.1 only got source backports (no release to
@@ -242,13 +263,13 @@ package_info() {
     for d in "$P_NAME" "${P_NAME%%-*}-common"; do
       f="$R/usr/share/doc/${d}/changelog.Debian.gz"
       [ -r "$f" ] || continue
-      if zcat "$f" 2>/dev/null | grep -qiE "$FIX_RE"; then P_CHANGELOG="fixed"; else P_CHANGELOG="absent"; fi
+      if zcat "$f" 2>/dev/null | has_match "$FIX_RE"; then P_CHANGELOG="fixed"; else P_CHANGELOG="absent"; fi
       break
     done
   else
     cl="$(rpm -q --changelog "$P_NAME" 2>/dev/null || true)"
     if [ -n "$cl" ]; then
-      if printf '%s\n' "$cl" | grep -qiE "$FIX_RE"; then P_CHANGELOG="fixed"; else P_CHANGELOG="absent"; fi
+      if printf '%s\n' "$cl" | has_match "$FIX_RE"; then P_CHANGELOG="fixed"; else P_CHANGELOG="absent"; fi
     fi
   fi
 }
@@ -368,7 +389,11 @@ for g in "${PHP_GLOBS[@]}"; do
     CANDIDATES+=("$f")
   done
 done
-for f in "${EXTRA_PHP[@]}"; do CANDIDATES+=("$f"); done
+for f in ${EXTRA_PHP[@]+"${EXTRA_PHP[@]}"}; do
+  # Binaries are started from /, so a relative --php path is anchored here.
+  case "$f" in /*) ;; *) f="$PWD/$f" ;; esac
+  CANDIDATES+=("$f")
+done
 
 declare -A SEEN
 B_PATH=(); B_VER=(); B_SAPI=(); B_STATUS=(); B_DETAIL=(); B_WEB=(); B_BRANCH=()
@@ -396,7 +421,7 @@ jset mod_php_branches "${MOD_PHP_BRANCHES# }"
 
 hdr "PHP builds"
 n=0
-for f in "${CANDIDATES[@]}"; do
+for f in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
   [ -x "$f" ] || { warn "${f#"$R"}: not executable, skipped"; continue; }
   real="$(readlink -f "$f" 2>/dev/null || printf '%s' "$f")"
   [ -n "${SEEN[$real]:-}" ] && continue
@@ -478,7 +503,7 @@ for f in "${CANDIDATES[@]}"; do
       ini="$(run_php "$f" -r "$INI_PROBE" || true)"
     else
       # php-cgi has no -r; it runs a script given on stdin.
-      ini="$(printf '<?php %s' "$INI_PROBE" | { if have timeout; then timeout 10 "$f" -q; else "$f" -q; fi; } 2>/dev/null || true)"
+      ini="$(printf '<?php %s' "$INI_PROBE" | php_exec "$f" -q || true)"
     fi
     ml="$(ini_val "$ini" memory_limit)"
     up="$(ini_val "$ini" session.upload_progress.enabled)"

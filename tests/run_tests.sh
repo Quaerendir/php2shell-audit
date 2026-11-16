@@ -21,7 +21,9 @@ fi
 chmod -R +x "$MOCK_BIN"
 
 # Write one fake PHP binary. -v prints the version line, -r (CLI) and -q
-# (CGI, script on stdin) print the ini probe answer from TEST_INI_*.
+# (CGI, script on stdin) print the ini probe answer from TEST_INI_*. The
+# values are written into the file: the audit starts PHP with an empty
+# environment, so the fake cannot read TEST_* at run time.
 fake_php() {
   local file="$1" ver="$2" sapi="$3"
   mkdir -p "$(dirname "$file")"
@@ -31,7 +33,7 @@ case "\$1" in
   -v) echo "PHP ${ver} (${sapi}) (built: ${TEST_PHP_BUILT-Oct 21 2026} 10:00:00) (NTS)"
       echo "Copyright (c) The PHP Group" ;;
   -r|-q) printf 'memory_limit=%s\nsession.upload_progress.enabled=%s\nfatal_error_backtraces=%s\npost_max_size=8M\nfile_uploads=1\nsession_ext=1\nsession.serialize_handler=%s\n' \\
-        "\${TEST_INI_ML-128M}" "\${TEST_INI_UP-1}" "\${TEST_INI_FEB-<unset>}" "\${TEST_INI_SH-php}" ;;
+        "${TEST_INI_ML-128M}" "${TEST_INI_UP-1}" "${TEST_INI_FEB-<unset>}" "${TEST_INI_SH-php}" ;;
 esac
 EOF
   chmod +x "$file"
@@ -43,6 +45,7 @@ EOF
 #   TEST_LINKS          "link=target ..." symlinks inside the root
 #   TEST_DPKG_OWNER     "path=package=version ..." (read by the dpkg mocks)
 #   TEST_DEB_CHANGELOG  changelog.Debian.gz content for every owner package
+#   TEST_CHANGELOG_PAD  1 = append ~300 KB of other entries to it
 #   TEST_DEB_DOC_DIR    write that changelog to this doc dir instead
 #   TEST_APACHE_LOAD    content of /etc/apache2/mods-enabled/php.load
 #   TEST_FPM_POOL       content of /etc/php/8.4/fpm/pool.d/www.conf
@@ -65,7 +68,9 @@ build_root() {
       IFS='=' read -r _ name _ <<< "$spec"
       name="${TEST_DEB_DOC_DIR:-$name}"
       mkdir -p "$r/usr/share/doc/$name"
-      printf '%b\n' "$TEST_DEB_CHANGELOG" | gzip -c > "$r/usr/share/doc/$name/changelog.Debian.gz"
+      { printf '%b\n' "$TEST_DEB_CHANGELOG"
+        if [ "${TEST_CHANGELOG_PAD:-0}" = "1" ]; then awk 'BEGIN { for (i = 0; i < 8000; i++) printf "  * some unrelated change number %06d\n", i }'; fi
+      } | gzip -c > "$r/usr/share/doc/$name/changelog.Debian.gz"
     done
   fi
   if [ -n "${TEST_APACHE_LOAD:-}" ]; then
@@ -217,6 +222,11 @@ run_case "Sury 8.4 on Debian 12, changelog without fix: VULNERABLE" "$DEB12" \
   -- "verdict:VULNERABLE" "php_0_changelog:absent"
 run_case "Sury 8.4 on Debian 12, no changelog: UNKNOWN" "$DEB12" \
   "TEST_PHP=/usr/sbin/php-fpm8.4|8.4.20|fpm-fcgi" "$SURY" -- "verdict:UNKNOWN" "rc:3" "php_0_changelog:unreadable"
+# The fix near the top of a changelog larger than a pipe buffer: an
+# early-exiting grep under pipefail used to turn this into "absent".
+run_case "large changelog with the fix near the top: PATCHED" "$DEB12" \
+  "TEST_PHP=/usr/sbin/php-fpm8.4|8.4.20|fpm-fcgi" "$SURY" "TEST_CHANGELOG_PAD=1" \
+  "TEST_DEB_CHANGELOG=php8.4 (8.4.20-1+deb12u9)\n  * Fix php2shell (CVE-2026-109619)" -- "verdict:PATCHED"
 run_case "changelog found through php8.4-common" "$DEB12" \
   "TEST_PHP=/usr/sbin/php-fpm8.4|8.4.20|fpm-fcgi" "$SURY" "TEST_DEB_DOC_DIR=php8.4-common" \
   "TEST_DEB_CHANGELOG=php8.4 (8.4.20-1+deb12u9)\n  * Fix php2shell (CVE-2026-109619)" -- "verdict:PATCHED"
@@ -341,6 +351,41 @@ run_case "banner + full hunt runs clean" "$ARCH" "$CGI84" "TEST_ARGS=--since 202
 run_case "quiet mode exits like JSON" "$ARCH" "TEST_PHP=/usr/bin/php|8.4.24|cli" "TEST_ARGS=--quiet" -- "rc:1"
 run_case "--version" "TEST_ARGS=--version" -- "rc:0"
 run_case "unknown option: ERROR" "TEST_ARGS=--bogus" -- "rc:4"
+
+# PHP binaries must start from / with an empty environment: php-cgi reads
+# ./php.ini, and PHPRC / PHP_INI_SCAN_DIR redirect any SAPI. The fakes record
+# where and how they were started, once per option the audit uses.
+r=$(mktemp -d "$TMP/root.XXXXXX")
+mkdir -p "$r/etc" "$r/usr/bin" "$r/hostile-cwd/bin"
+cp "$FIXTURES/os-release-arch" "$r/etc/os-release"
+trace_php() { # trace_php FILE SAPI
+  cat > "$1" <<TRACE
+#!/bin/sh
+{ echo "cwd=\$(pwd)"; echo "PHPRC=\${PHPRC-unset}"; echo "PHP_INI_SCAN_DIR=\${PHP_INI_SCAN_DIR-unset}"; echo "LD_PRELOAD=\${LD_PRELOAD-unset}"; } > "$r/trace.\${0##*/}\$1"
+case "\$1" in
+  -v) echo "PHP 8.4.24 ($2) (built: Sep  7 2026 10:00:00) (NTS)" ;;
+  -r|-q) printf 'memory_limit=128M\nsession.upload_progress.enabled=1\nsession_ext=1\nsession.serialize_handler=php\n' ;;
+esac
+TRACE
+  chmod +x "$1"
+}
+trace_php "$r/usr/bin/php" cli
+trace_php "$r/usr/bin/php-cgi" cgi-fcgi
+trace_php "$r/hostile-cwd/bin/php-extra" cli
+env_out=$(cd "$r/hostile-cwd" && PHPRC="$r/hostile-cwd" PHP_INI_SCAN_DIR="$r/hostile-cwd" LD_PRELOAD="$r/hostile-cwd/x.so" \
+  PHP2SHELL_TEST_ROOT="$r" PHP2SHELL_TEST_PATH="$MOCK_BIN" "$SCRIPT" --json --no-hunt --php bin/php-extra 2>/dev/null)
+for t in php-v php-r php-cgi-v php-cgi-q php-extra-v php-extra-r; do
+  if [ -r "$r/trace.$t" ] && [ "$(tr '\n' ' ' < "$r/trace.$t")" = "cwd=/ PHPRC=unset PHP_INI_SCAN_DIR=unset LD_PRELOAD=unset " ]; then
+    echo "PASS: ${t%-*} ${t##*-} started from / with a clean environment"; pass=$((pass+1))
+  else
+    printf 'FAIL: %s not started from / with a clean environment: %s\n' "$t" "$(tr '\n' ' ' < "$r/trace.$t" 2>&1)"; fail_count=$((fail_count+1))
+  fi
+done
+if printf '%s' "$env_out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["php_builds"] == 3 and "128M" in (d.get("php_0_memory_limit"), d.get("php_1_memory_limit")) else 1)' 2>/dev/null; then
+  echo "PASS: clean environment keeps all three builds and the ini probes working"; pass=$((pass+1))
+else
+  printf 'FAIL: builds/ini probe after environment scrub: %s\n' "$env_out"; fail_count=$((fail_count+1))
+fi
 
 marker="$TMP/sourced-marker"
 # shellcheck disable=SC2016  # the $( ) must reach the file unexpanded

@@ -2,6 +2,16 @@
 
 All notable changes to `php2shell-audit` are documented here.
 
+## [Unreleased]
+
+### Security
+- PHP binaries are now started from `/` with an empty environment. php-cgi loads a `php.ini` from the current directory, so running the audit as root from a directory another user can write to (a web root, `/tmp`) executed that user's `auto_prepend_file` or extension as root; `PHPRC` and `PHP_INI_SCAN_DIR` in the caller's environment had the same effect for every SAPI. Reproduced with the real php-cgi 8.3.
+- A relative `--php` path is resolved against the directory the audit was started in.
+
+### Fixed
+- The changelog search could miss a listed fix: with `pipefail`, `grep -q` left at the first hit and the writer died of SIGPIPE, so a changelog larger than a pipe buffer read as "no match". The search now counts matches.
+- On bash 4.0-4.3 the script aborted with exit 1 (read by callers as MITIGATED) unless `--php` was given: an empty array expanded to an "unbound variable" error under `set -u`. Checked under bash 4.2 and 4.3.
+
 ## [1.1.0] — 2026-10-24
 
 ### Added

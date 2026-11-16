@@ -45,7 +45,7 @@ Distro states are a 2026-10-21 snapshot. Distros backport without bumping the PH
 
 ## What this script does
 
-It only triages and changes nothing. It never sends a request, never runs a PoC and never edits `php.ini` or pool configs. It does execute the PHP binaries it finds, with `-v` and a read-only `ini_get()` snippet.
+It only triages and changes nothing. It never sends a request, never runs a PoC and never edits `php.ini` or pool configs. It does execute the PHP binaries it finds, with `-v` and a read-only `ini_get()` snippet, always from `/` and with an empty environment (php-cgi loads a `php.ini` from the current directory, and `PHPRC` / `PHP_INI_SCAN_DIR` redirect any SAPI).
 
 - **Finds every PHP build** in the usual system prefixes: distro and Sury (`/usr/bin/php*`, `/usr/sbin/php-fpm*`), Remi, cPanel EA, CloudLinux alt-php, Plesk, LiteSpeed `lsphp`, FrankenPHP, and the `php-cgiNN` / `php.binNN` zoo of shared hosting. Symlinks are counted once; `php-config`/`phpize` are skipped. `--php PATH` adds more.
 - **Decides per build**:
